@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import asyncio
 import contextvars
 import heapq
@@ -71,6 +72,9 @@ if TYPE_CHECKING:
 _AgentActivityContextVar = contextvars.ContextVar["AgentActivity"]("agents_activity")
 _SpeechHandleContextVar = contextvars.ContextVar["SpeechHandle"]("agents_speech_handle")
 
+# Pre-compile regex pattern for better performance
+# Hindi ([\u0900-\u0963\u0965-\u097F]+ except '।') + English/Spanish ([a-zA-ZáéíóúüñÁÉÍÓÚÜÑ]+)
+WORD_PATTERN = re.compile(r'[\u0900-\u0963\u0965-\u097F]+|[a-zA-ZáéíóúüñÁÉÍÓÚÜÑ]+')
 
 @dataclass
 class _PreemptiveGeneration:
@@ -90,6 +94,7 @@ class AgentActivity(RecognitionHooks):
         self._audio_recognition: AudioRecognition | None = None
         self._lock = asyncio.Lock()
         self._tool_choice: llm.ToolChoice | None = None
+        self._ignore_interrupt_list = None
 
         self._started = False
         self._closed = False
@@ -193,6 +198,10 @@ class AgentActivity(RecognitionHooks):
         self._on_enter_task: asyncio.Task | None = None
         self._on_exit_task: asyncio.Task | None = None
 
+        self._ignore_interrupt_list = frozenset(self._session._opts.ignore_interrupt_list)
+        if self._session._opts.ignore_interrupt_list:
+            self._ignore_interrupt_list = frozenset(self._session._opts.ignore_interrupt_list)
+
     @property
     def scheduling_paused(self) -> bool:
         return self._scheduling_paused
@@ -257,6 +266,23 @@ class AgentActivity(RecognitionHooks):
             if is_given(self._agent.use_tts_aligned_transcript)
             else self._session.options.use_tts_aligned_transcript
         )
+    def remove_stopwords(self,text: str) -> list[str]:
+        """
+        Efficiently remove stopwords from text.
+        Uses pre-compiled regex and frozenset for O(1) lookups.
+
+        Args:
+            text: Input text string
+
+        Returns:
+            List of non-stopword words
+        """
+        trimmed_words = None
+        if text and self._ignore_interrupt_list:
+            words = WORD_PATTERN.findall(text)
+            trimmed_words = [word for word in words if word not in self._ignore_interrupt_list]
+            return trimmed_words
+        return trimmed_words
 
     async def update_instructions(self, instructions: str) -> None:
         self._agent._instructions = instructions
@@ -1042,6 +1068,12 @@ class AgentActivity(RecognitionHooks):
             and not self._current_speech.interrupted
             and self._current_speech.allow_interruptions
         ):
+            filtered = self.remove_stopwords(self._audio_recognition.current_transcript)
+            logger.info(f"filtered: {filtered}")
+            logger.info(f"self._session.options.current_transcript: {self._audio_recognition.current_transcript}")
+            if filtered is not None and len(filtered) < self._session.options.min_interruption_words:
+                return
+
             if self._rt_session is not None:
                 self._rt_session.interrupt()
 
@@ -1169,6 +1201,12 @@ class AgentActivity(RecognitionHooks):
                     extra={"user_input": info.new_transcript},
                 )
                 return
+
+            logger.info(f"info.new_transcript: {info.new_transcript}")
+            logger.info(f"self._session.options.min_interruption_words: {self._session.options.min_interruption_words}")
+            filtered = self.remove_stopwords(info.new_transcript)
+            if filtered is not None and len(filtered) < self._session.options.min_interruption_words:
+                return  
 
             self._current_speech.interrupt()
             if self._current_speech.interrupted:
