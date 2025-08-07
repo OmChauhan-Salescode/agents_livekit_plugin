@@ -1100,10 +1100,15 @@ class AgentActivity(RecognitionHooks):
                 await audio_output.wait_for_playout()
 
         if add_to_chat_ctx:
+            node = None
+            if isinstance(text_out, dict) and "node" in text_out:
+                node = text_out["node"]
+            
             msg = self._agent._chat_ctx.add_message(
                 role="assistant",
                 content=text_out.text if text_out else "",
                 interrupted=speech_handle.interrupted,
+                node=node if node else NOT_GIVEN,
             )
             speech_handle._set_chat_message(msg)
             self._session._conversation_item_added(msg)

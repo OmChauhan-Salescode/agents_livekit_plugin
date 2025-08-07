@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Union, overload
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Optional, Union, overload
 
 from pydantic import BaseModel, Field, PrivateAttr, TypeAdapter
 from typing_extensions import TypeAlias
@@ -113,6 +113,7 @@ class ChatMessage(BaseModel):
     interrupted: bool = False
     hash: bytes | None = None
     created_at: float = Field(default_factory=time.time)
+    node: Optional[str] = None
 
     @property
     def text_content(self) -> str | None:
@@ -178,6 +179,7 @@ class ChatContext:
         id: NotGivenOr[str] = NOT_GIVEN,
         interrupted: NotGivenOr[bool] = NOT_GIVEN,
         created_at: NotGivenOr[float] = NOT_GIVEN,
+        node: NotGivenOr[str] = NOT_GIVEN,
     ) -> ChatMessage:
         kwargs: dict[str, Any] = {}
         if is_given(id):
@@ -186,6 +188,8 @@ class ChatContext:
             kwargs["interrupted"] = interrupted
         if is_given(created_at):
             kwargs["created_at"] = created_at
+        if is_given(node):
+            kwargs["node"] = node
 
         if isinstance(content, str):
             message = ChatMessage(role=role, content=[content], **kwargs)
